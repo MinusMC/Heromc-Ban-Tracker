@@ -6,8 +6,8 @@ from datetime import datetime, timedelta
 import asyncio
 import logging
 from logging.config import dictConfig
-import json
 import os
+import json
 
 clear = lambda: os.system('cls')
 clear()
@@ -47,29 +47,37 @@ ch.setLevel(logging.DEBUG)
 ch.setFormatter(CustomFormatter())
 logger.addHandler(ch)
 
-# Load config
-with open('config.json', 'r') as f:
-    config = json.load(f)
-
-BOT_TOKEN = config['bot_token']
-GUILD_ID = config['guild_id']
-CHANNEL_ID = config['channel_id']
-BOT_ENABLED = config['bot_enabled']
-WEBHOOK_ENABLED = config['webhook_enabled']
-WEBHOOK_URL = config['webhook_url']
-REFRESH_TIME = config['refresh_time']
-
-if BOT_ENABLED and WEBHOOK_ENABLED:
-    logging.error('Both webhook and bot are enabled. Please enable only one.')
-    exit(1)
-
-if not BOT_ENABLED and not WEBHOOK_ENABLED:
-    logging.error('Neither webhook nor bot is enabled. Please enable one.')
-    exit(1)
-
 # Constants
 URL = "https://id.heromc.net/vi-pham/bans.php"
 HEROMC_URL = "https://id.heromc.net/vi-pham/info.php?type=ban&id={}"
+CONFIG_FILE = 'config.json'
+
+def get_config():
+    """Load configuration from config.json or create it if it doesn't exist."""
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, 'r') as f:
+            return json.load(f)
+    else:
+        print("Configuration file not found. Creating a new one.")
+        bot_token = input("Enter your bot token: ")
+        channel_id = int(input("Enter your channel ID: "))
+        guild_id = int(input("Enter your guild ID: "))
+        refresh_time = int(input("Enter refresh time (in seconds): "))
+        config = {
+            "BOT_TOKEN": bot_token,
+            "CHANNEL_ID": channel_id,
+            "GUILD_ID": guild_id,
+            "REFRESH_TIME": refresh_time
+        }
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(config, f, indent=4)
+        return config
+
+config = get_config()
+BOT_TOKEN = config["BOT_TOKEN"]
+CHANNEL_ID = config["CHANNEL_ID"]
+GUILD_ID = config["GUILD_ID"]
+REFRESH_TIME = config["REFRESH_TIME"]
 
 def get_id(url):
     """Get the ID from the URL"""
@@ -91,7 +99,7 @@ class BanChecker(commands.Bot):
         self.first_ban = True  # Flag to track if it's the first ban
 
     async def on_ready(self):
-        logging.info(f'Logged in as {self.user.name}')
+        logging.info(f'Logged as {self.user.name}')
         self.channel = self.get_channel(CHANNEL_ID)
         self.guild = self.get_guild(GUILD_ID)
         await self.channel.purge(limit=None)
@@ -127,8 +135,12 @@ class BanChecker(commands.Bot):
                         if td.text == 'Lý do':
                             reason = td.find_next_sibling('td').text.strip()
 
-                    if "Lỗi: ban không tìm thấy trong cơ sở dữ liệu." not in soup.get_text():
-                        if not self.first_ban:  # Ignore the first ban
+                    if "Lỗi: ban không tìm thấy trong cơ sở dữ liệu." in soup.get_text():
+                        pass
+                    else:
+                        if self.first_ban:  # Ignore the first ban
+                            self.first_ban = False
+                        else:
                             ban_timestamp = int(datetime.now().timestamp())
                             unban_timestamp = int((datetime.now() + timedelta(days=2)).timestamp())
                             embed = discord.Embed(
@@ -144,7 +156,6 @@ class BanChecker(commands.Bot):
                             embed.add_field(name='Full info:', value=f'[Click Here](https://id.heromc.net/vi-pham/info.php?type=ban&id={self.id})', inline=False)
                             embed.set_thumbnail(url=self.guild.icon.url)
                             await self.channel.send(embed=embed)
-                        self.first_ban = False
                         self.id += 1
                 else:
                     logging.error(f'Heromc: Error: {response.status_code}')
@@ -152,66 +163,6 @@ class BanChecker(commands.Bot):
                 logging.error(e)
             await asyncio.sleep(REFRESH_TIME)
 
-async def send_webhook_notification(id):
-    response = requests.get(HEROMC_URL.format(id))
-    if response.status_code == 200:
-        soup = BeautifulSoup(response.text, "html.parser")
-        td_tags = soup.find_all('td')
-        user = None
-        staff = None
-        reason = None
-
-        for td in td_tags:
-            if td.text == 'Người chơi':
-                user = td.find_next_sibling('td').text.strip()
-            if td.text == 'Bị phạt bởi':
-                staff = td.find_next_sibling('td').text.strip()
-            if td.text == 'Lý do':
-                reason = td.find_next_sibling('td').text.strip()
-
-        if "Lỗi: ban không tìm thấy trong cơ sở dữ liệu." not in soup.get_text():
-            ban_timestamp = int(datetime.now().timestamp())
-            unban_timestamp = int((datetime.now() + timedelta(days=2)).timestamp())
-            data = {
-                "embeds": [{
-                    "title": ":robot: AntiCheat Ban Notification",
-                    "color": 0xff0000 if "Console" in staff else 0x00ff00,
-                    "fields": [
-                        {"name": "User:", "value": user, "inline": False},
-                        {"name": "Reason:", "value": reason, "inline": False},
-                        {"name": "Banned By:", "value": "Console" if "Console" in staff else staff, "inline": False},
-                        {"name": "Ban ID:", "value": f'Ban #{id}', "inline": False},
-                        {"name": "Banned:", "value": f'<t:{ban_timestamp}:R>', "inline": False},
-                        {"name": "Will get unban:", "value": f'<t:{unban_timestamp}:R>', "inline": False},
-                        {"name": "Full info:", "value": f'[Click Here](https://id.heromc.net/vi-pham/info.php?type=ban&id={id})', "inline": False},
-                    ],
-                    "thumbnail": {"url": "https://id.heromc.net/static/images/logo.png"}
-                }]
-            }
-            result = requests.post(WEBHOOK_URL, json=data)
-            if result.status_code != 204:
-                logging.error(f'Webhook error: {result.status_code}, {result.text}')
-
-async def webhook_checker():
-    id = get_id(URL)
-    first_ban = True
-    while True:
-        try:
-            if not first_ban:
-                await send_webhook_notification(id)
-            first_ban = False
-            id += 1
-        except Exception as e:
-            logging.error(e)
-        await asyncio.sleep(REFRESH_TIME)
-
-if WEBHOOK_ENABLED:
-    logging.info('Hí anh bạn, webhook đang được hoàn thiện, thử lại sau update mới')
-    asyncio.run(webhook_checker())
-elif BOT_ENABLED:
-    bot = BanChecker()
-    logging.info('Starting bot...')
-    bot.run(BOT_TOKEN)
-else:
-    logging.error('Neither webhook nor bot is enabled. Please enable one.')
-    exit(1)
+bot = BanChecker()
+logging.info('Starting...')
+bot.run(BOT_TOKEN)
