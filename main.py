@@ -63,6 +63,10 @@ if BOT_ENABLED and WEBHOOK_ENABLED:
     logging.error('Both webhook and bot are enabled. Please enable only one.')
     exit(1)
 
+if not BOT_ENABLED and not WEBHOOK_ENABLED:
+    logging.error('Neither webhook nor bot is enabled. Please enable one.')
+    exit(1)
+
 # Constants
 URL = "https://id.heromc.net/vi-pham/bans.php"
 HEROMC_URL = "https://id.heromc.net/vi-pham/info.php?type=ban&id={}"
@@ -123,12 +127,8 @@ class BanChecker(commands.Bot):
                         if td.text == 'Lý do':
                             reason = td.find_next_sibling('td').text.strip()
 
-                    if "Lỗi: ban không tìm thấy trong cơ sở dữ liệu." in soup.get_text():
-                        pass
-                    else:
-                        if self.first_ban:  # Ignore the first ban
-                            self.first_ban = False
-                        else:
+                    if "Lỗi: ban không tìm thấy trong cơ sở dữ liệu." not in soup.get_text():
+                        if not self.first_ban:  # Ignore the first ban
                             ban_timestamp = int(datetime.now().timestamp())
                             unban_timestamp = int((datetime.now() + timedelta(days=2)).timestamp())
                             embed = discord.Embed(
@@ -144,6 +144,7 @@ class BanChecker(commands.Bot):
                             embed.add_field(name='Full info:', value=f'[Click Here](https://id.heromc.net/vi-pham/info.php?type=ban&id={self.id})', inline=False)
                             embed.set_thumbnail(url=self.guild.icon.url)
                             await self.channel.send(embed=embed)
+                        self.first_ban = False
                         self.id += 1
                 else:
                     logging.error(f'Heromc: Error: {response.status_code}')
@@ -168,9 +169,7 @@ async def send_webhook_notification(id):
             if td.text == 'Lý do':
                 reason = td.find_next_sibling('td').text.strip()
 
-        if "Lỗi: ban không tìm thấy trong cơ sở dữ liệu." in soup.get_text():
-            pass
-        else:
+        if "Lỗi: ban không tìm thấy trong cơ sở dữ liệu." not in soup.get_text():
             ban_timestamp = int(datetime.now().timestamp())
             unban_timestamp = int((datetime.now() + timedelta(days=2)).timestamp())
             data = {
@@ -198,17 +197,16 @@ async def webhook_checker():
     first_ban = True
     while True:
         try:
-            if first_ban:
-                first_ban = False
-            else:
+            if not first_ban:
                 await send_webhook_notification(id)
+            first_ban = False
             id += 1
         except Exception as e:
             logging.error(e)
         await asyncio.sleep(REFRESH_TIME)
 
 if WEBHOOK_ENABLED:
-    logging.info('Starting webhook checker...')
+    logging.info('Hí anh bạn, webhook đang được hoàn thiện, thử lại sau update mới')
     asyncio.run(webhook_checker())
 elif BOT_ENABLED:
     bot = BanChecker()
