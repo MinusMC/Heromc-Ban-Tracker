@@ -1,2 +1,9 @@
 # Heromc-Ban-Tracker
-kcj
+HOW TO USE
+
+THIS IS HEROMC BAN TRACKER
+TOOL CÓ THỂ TỰ LẤY ID
+
+ĐIỀN BOT TOKEN NẾU DÙNG BOT OWRR WEBHOOK NẾU DÙNG WEBHOOK
+
+MADE BY **ndiep.2006_ and idle.zzz** 
