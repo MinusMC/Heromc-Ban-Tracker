@@ -9,9 +9,11 @@ from logging.config import dictConfig
 import os
 import json
 
+# Clear console
 clear = lambda: os.system('cls')
 clear()
 
+# Custom logging formatter
 class CustomFormatter(logging.Formatter):
     """A Custom Formatter Class For Logging"""
 
@@ -36,6 +38,7 @@ class CustomFormatter(logging.Formatter):
         formatter = logging.Formatter(log_fmt, "%d %b %Y %H:%M:%S")
         return formatter.format(record)
 
+# Configure logging
 dictConfig({
     "version": 1,
     "disable_existing_loggers": True,
@@ -52,6 +55,7 @@ URL = "https://id.heromc.net/vi-pham/bans.php"
 HEROMC_URL = "https://id.heromc.net/vi-pham/info.php?type=ban&id={}"
 CONFIG_FILE = 'config.json'
 
+# Load configuration
 def get_config():
     """Load configuration from config.json or create it if it doesn't exist."""
     if os.path.exists(CONFIG_FILE):
@@ -79,6 +83,7 @@ CHANNEL_ID = config["CHANNEL_ID"]
 GUILD_ID = config["GUILD_ID"]
 REFRESH_TIME = config["REFRESH_TIME"]
 
+# Get the ID from the URL
 def get_id(url):
     """Get the ID from the URL"""
     response = requests.get(url)
@@ -90,16 +95,17 @@ def get_id(url):
             return int(id)
     return None
 
+# Discord bot class
 class BanChecker(commands.Bot):
     def __init__(self):
-        super().__init__(command_prefix='None', intents=discord.Intents.all())
+        super().__init__(command_prefix='!', intents=discord.Intents.all())
         self.channel = None
         self.guild = None
         self.id = get_id(URL)
         self.first_ban = True  # Flag to track if it's the first ban
 
     async def on_ready(self):
-        logging.info(f'Logged as {self.user.name}')
+        logging.info(f'Logged in as {self.user.name}')
         self.channel = self.get_channel(CHANNEL_ID)
         self.guild = self.get_guild(GUILD_ID)
         await self.channel.purge(limit=None)
@@ -123,9 +129,7 @@ class BanChecker(commands.Bot):
                 if response.status_code == 200:
                     soup = BeautifulSoup(response.text, "html.parser")
                     td_tags = soup.find_all('td')
-                    user = None
-                    staff = None
-                    reason = None
+                    user, staff, reason = None, None, None
 
                     for td in td_tags:
                         if td.text == 'Người chơi':
@@ -135,9 +139,7 @@ class BanChecker(commands.Bot):
                         if td.text == 'Lý do':
                             reason = td.find_next_sibling('td').text.strip()
 
-                    if "Lỗi: ban không tìm thấy trong cơ sở dữ liệu." in soup.get_text():
-                        pass
-                    else:
+                    if "Lỗi: ban không tìm thấy trong cơ sở dữ liệu." not in soup.get_text():
                         if self.first_ban:  # Ignore the first ban
                             self.first_ban = False
                         else:
@@ -163,6 +165,7 @@ class BanChecker(commands.Bot):
                 logging.error(e)
             await asyncio.sleep(REFRESH_TIME)
 
+# Run the bot
 bot = BanChecker()
 logging.info('Starting...')
 bot.run(BOT_TOKEN)
