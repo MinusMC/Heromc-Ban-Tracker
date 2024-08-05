@@ -8,10 +8,18 @@ import logging
 from logging.config import dictConfig
 import os
 import json
+import sqlite3
 
-# Clear console
-clear = lambda: os.system('cls' if os.name == 'nt' else 'clear')
-clear()
+# Clear console and set console title
+def setup_console():
+    clear = lambda: os.system('cls' if os.name == 'nt' else 'clear')
+    clear()
+    if os.name == 'nt':  # Windows
+        os.system('title HeromcBan Tracker by Idle và NgocDiep 2006')
+    else:  # Unix-like (Linux/macOS)
+        print("\033]0;HeromcBan Tracker\007")
+
+setup_console()
 
 # Custom logging formatter
 class CustomFormatter(logging.Formatter):
@@ -54,7 +62,7 @@ logger.addHandler(ch)
 URL = "https://id.heromc.net/vi-pham/bans.php"
 HEROMC_URL = "https://id.heromc.net/vi-pham/info.php?type=ban&id={}"
 CONFIG_FILE = 'config.json'
-DB_FILE = 'ban_tracker.db'
+DB_FILE = 'ban_log.db'
 
 # Load configuration
 def get_config():
@@ -87,42 +95,18 @@ GUILD_ID = config["GUILD_ID"]
 REFRESH_TIME = config["REFRESH_TIME"]
 PREFIX = config["PREFIX"]
 
-# Initialize database
-def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS bans (
-            id INTEGER PRIMARY KEY,
-            user TEXT,
-            staff TEXT,
-            reason TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
-def log_ban_to_db(user, staff, reason):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO bans (user, staff, reason)
-        VALUES (?, ?, ?)
-    ''', (user, staff, reason))
-    conn.commit()
-    conn.close()
-
 # Get the ID from the URL
 def get_id(url):
     """Get the ID from the URL"""
     response = requests.get(url)
-    soup = BeautifulSoup(response.content, 'html.parser')
-    links = soup.find_all('a', href=True)
-    for link in links:
-        if "info.php?type=ban&id=" in link['href']:
-            id = link['href'].split('=')[-1]
-            return int(id)
+    if response.status_code == 200:
+        soup = BeautifulSoup(response.content, 'html.parser')
+        links = soup.find_all('a', href=True)
+        for link in links:
+            if "info.php?type=ban&id=" in link['href']:
+                return int(link['href'].split('=')[-1])
+    else:
+        logger.error(f'Failed to get ID from URL: {response.status_code}')
     return None
 
 # Embed builder for ban notifications
@@ -143,24 +127,39 @@ def create_ban_embed(user, staff, reason, ban_id, guild_icon_url):
     embed.set_thumbnail(url=guild_icon_url)
     return embed
 
+# Initialize the database
+def init_db():
+    with sqlite3.connect(DB_FILE) as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS bans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user TEXT,
+                staff TEXT,
+                reason TEXT,
+                timestamp TEXT
+            )
+        ''')
+        conn.commit()
+
 # Discord bot class
 class BanChecker(commands.Bot):
     def __init__(self):
-        super().__init__(command_prefix=PREFIX, intents=discord.Intents.all())
+        super().__init__(command_prefix=PREFIX, intents=discord.Intents.all(), help_command=None)
         self.channel = None
         self.guild = None
         self.id = get_id(URL)
         self.first_ban = True  # Flag to track if it's the first ban
 
     async def on_ready(self):
-        clear()
-        print(f"\n{'='*50}\nHeromcBan Tracker by idle.zzz and ngocdiep2006\n{'='*50}")
         logger.info(f'Logged in as {self.user.name}')
         self.channel = self.get_channel(CHANNEL_ID)
         self.guild = self.get_guild(GUILD_ID)
         await self.channel.purge(limit=None)
+        
+        # Send start message
         embed = discord.Embed(
-            title="Ban Checker Started",
+            title="Heromc Ban Tracker",
             description="Monitoring for new bans...",
             color=0x00ff00
         )
@@ -169,6 +168,8 @@ class BanChecker(commands.Bot):
         embed.add_field(name='Refresh every:', value=f'{REFRESH_TIME}s', inline=False)
         embed.set_thumbnail(url=self.guild.icon.url)
         await self.channel.send(embed=embed)
+        
+        # Start checking bans
         await self.check_bans()
 
     async def check_bans(self):
@@ -189,65 +190,76 @@ class BanChecker(commands.Bot):
                             reason = td.find_next_sibling('td').text.strip()
 
                     if "Lỗi: ban không tìm thấy trong cơ sở dữ liệu." not in soup.get_text():
-                        if self.first_ban:  # Ignore the first ban
-                            self.first_ban = False
-                        else:
+                        if not self.first_ban:  # Ignore the first ban
                             embed = create_ban_embed(user, staff, reason, self.id, self.guild.icon.url)
                             await self.channel.send(embed=embed)
-                            log_ban_to_db(user, staff, reason)  # Log to the database
+                            # Save ban to database
+                            with sqlite3.connect(DB_FILE) as conn:
+                                cursor = conn.cursor()
+                                cursor.execute('''
+                                    INSERT INTO bans (user, staff, reason, timestamp)
+                                    VALUES (?, ?, ?, ?)
+                                ''', (user, staff, reason, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+                                conn.commit()
+                        else:
+                            self.first_ban = False
                         self.id += 1
                 else:
                     logger.error(f'Heromc: Error: {response.status_code}')
             except Exception as e:
-                logger.error(e)
+                logger.error(f'An error occurred: {e}')
             await asyncio.sleep(REFRESH_TIME)
 
-# Additional commands
-@bot.command(name='banlog', help='Shows the ban log')
+# Command for showing the ban log
+@commands.command(name='banlog', help='Shows the ban log')
 async def banlog(ctx, user: str = None):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    if user:
-        cursor.execute('SELECT * FROM bans WHERE user = ?', (user,))
-    else:
-        cursor.execute('SELECT * FROM bans ORDER BY timestamp DESC LIMIT 10')
-    results = cursor.fetchall()
-    conn.close()
+    with sqlite3.connect(DB_FILE) as conn:
+        cursor = conn.cursor()
+        if user:
+            cursor.execute('SELECT * FROM bans WHERE user = ?', (user,))
+        else:
+            cursor.execute('SELECT * FROM bans ORDER BY id DESC LIMIT 10')
+        rows = cursor.fetchall()
 
-    if results:
+    if rows:
         embed = discord.Embed(
-            title="Ban Log",
+            title=f"Ban Log{' for ' + user if user else ''}",
             color=0x00ff00
         )
-        for row in results:
-            embed.add_field(name=f"Ban ID: {row[0]}", value=f"User: {row[1]}\nStaff: {row[2]}\nReason: {row[3]}\nTime: {row[4]}", inline=False)
+        for row in rows:
+            embed.add_field(name=f"Ban ID: {row[0]}",
+                            value=f"User: {row[1]}\nBanned By: {row[2]}\nReason: {row[3]}\nTime: {row[4]}", inline=False)
         await ctx.send(embed=embed)
     else:
-        await ctx.send("No bans found.")
+        await ctx.send(f"No bans found{' for ' + user if user else ''}.")
 
-@bot.command(name='clearlog', help='Clears the ban log')
+# Command for clearing the ban log
+@commands.command(name='clearlog', help='Clears the ban log')
 @commands.has_permissions(administrator=True)
 async def clearlog(ctx):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute('DELETE FROM bans')
-    conn.commit()
-    conn.close()
+    with sqlite3.connect(DB_FILE) as conn:
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM bans')
+        conn.commit()
     await ctx.send("Ban log cleared.")
 
-@bot.command(name='help', help='Displays this help message')
+# Custom help command
+@commands.command(name='help', help='Displays this help message')
 async def custom_help(ctx):
-    help_text = """
+    help_text = f"""
     **HeromcBan Tracker Commands:**
-    - **!banlog [user]**: Shows the ban log for a specific user or the latest 10 bans if no user is specified.
-    - **!clearlog**: Clears the ban log (Admin only).
-    - **!help**: Displays this help message.
+    - **{PREFIX}banlog [user]**: Shows the ban log.
+    - **{PREFIX}clearlog**: Clears the ban log (Admin only).
+    - **{PREFIX}help**: Displays this help message.
     """
     await ctx.send(help_text)
 
-# Run the bot
-if __name__ == '__main__':
-    init_db()
-    bot = BanChecker()
-    logger.info('Starting...')
-    bot.run(BOT_TOKEN)
+init_db()
+
+bot = BanChecker()
+bot.add_command(banlog)
+bot.add_command(clearlog)
+bot.add_command(custom_help)
+
+logger.info('Starting...')
+bot.run(BOT_TOKEN)
