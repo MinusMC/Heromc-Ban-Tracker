@@ -67,11 +67,13 @@ def get_config():
         channel_id = int(input("Enter your channel ID: "))
         guild_id = int(input("Enter your guild ID: "))
         refresh_time = int(input("Enter refresh time (in seconds): "))
+        prefix = input("Enter the command prefix: ")
         config = {
             "BOT_TOKEN": bot_token,
             "CHANNEL_ID": channel_id,
             "GUILD_ID": guild_id,
-            "REFRESH_TIME": refresh_time
+            "REFRESH_TIME": refresh_time,
+            "PREFIX": prefix
         }
         with open(CONFIG_FILE, 'w') as f:
             json.dump(config, f, indent=4)
@@ -82,6 +84,7 @@ BOT_TOKEN = config["BOT_TOKEN"]
 CHANNEL_ID = config["CHANNEL_ID"]
 GUILD_ID = config["GUILD_ID"]
 REFRESH_TIME = config["REFRESH_TIME"]
+PREFIX = config["PREFIX"]
 
 # Get the ID from the URL
 def get_id(url):
@@ -98,7 +101,7 @@ def get_id(url):
 # Discord bot class
 class BanChecker(commands.Bot):
     def __init__(self):
-        super().__init__(command_prefix='!', intents=discord.Intents.all())
+        super().__init__(command_prefix=PREFIX, intents=discord.Intents.all())
         self.channel = None
         self.guild = None
         self.id = get_id(URL)
