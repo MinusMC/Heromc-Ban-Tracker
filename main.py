@@ -10,7 +10,7 @@ import os
 import json
 
 # Clear console
-clear = lambda: os.system('cls')
+clear = lambda: os.system('cls' if os.name == 'nt' else 'clear')
 clear()
 
 # Custom logging formatter
@@ -54,6 +54,7 @@ logger.addHandler(ch)
 URL = "https://id.heromc.net/vi-pham/bans.php"
 HEROMC_URL = "https://id.heromc.net/vi-pham/info.php?type=ban&id={}"
 CONFIG_FILE = 'config.json'
+DB_FILE = 'ban_tracker.db'
 
 # Load configuration
 def get_config():
@@ -86,6 +87,32 @@ GUILD_ID = config["GUILD_ID"]
 REFRESH_TIME = config["REFRESH_TIME"]
 PREFIX = config["PREFIX"]
 
+# Initialize database
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS bans (
+            id INTEGER PRIMARY KEY,
+            user TEXT,
+            staff TEXT,
+            reason TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def log_ban_to_db(user, staff, reason):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO bans (user, staff, reason)
+        VALUES (?, ?, ?)
+    ''', (user, staff, reason))
+    conn.commit()
+    conn.close()
+
 # Get the ID from the URL
 def get_id(url):
     """Get the ID from the URL"""
@@ -98,6 +125,24 @@ def get_id(url):
             return int(id)
     return None
 
+# Embed builder for ban notifications
+def create_ban_embed(user, staff, reason, ban_id, guild_icon_url):
+    ban_timestamp = int(datetime.now().timestamp())
+    unban_timestamp = int((datetime.now() + timedelta(days=2)).timestamp())
+    embed = discord.Embed(
+        title=":robot: AntiCheat Ban Notification",
+        color=0xff0000 if "Console" in staff else 0x00ff00
+    )
+    embed.add_field(name='User:', value=user, inline=False)
+    embed.add_field(name='Reason:', value=reason, inline=False)
+    embed.add_field(name='Banned By:', value='Console' if "Console" in staff else staff, inline=False)
+    embed.add_field(name='Ban ID:', value=f'Ban #{ban_id}', inline=False)
+    embed.add_field(name='Banned:', value=f'<t:{ban_timestamp}:R>', inline=False)
+    embed.add_field(name='Will get unban:', value=f'<t:{unban_timestamp}:R>', inline=False)
+    embed.add_field(name='Full info:', value=f'[Click Here](https://id.heromc.net/vi-pham/info.php?type=ban&id={ban_id})', inline=False)
+    embed.set_thumbnail(url=guild_icon_url)
+    return embed
+
 # Discord bot class
 class BanChecker(commands.Bot):
     def __init__(self):
@@ -108,16 +153,17 @@ class BanChecker(commands.Bot):
         self.first_ban = True  # Flag to track if it's the first ban
 
     async def on_ready(self):
-        logging.info(f'Logged in as {self.user.name}')
+        clear()
+        print(f"\n{'='*50}\nHeromcBan Tracker by idle.zzz and ngocdiep2006\n{'='*50}")
+        logger.info(f'Logged in as {self.user.name}')
         self.channel = self.get_channel(CHANNEL_ID)
         self.guild = self.get_guild(GUILD_ID)
         await self.channel.purge(limit=None)
         embed = discord.Embed(
-            title="", 
-            description="", 
+            title="Ban Checker Started",
+            description="Monitoring for new bans...",
             color=0x00ff00
         )
-        embed.add_field(name='Status:', value='Started')
         starttime = int(datetime.now().timestamp())
         embed.add_field(name='Start time:', value=f'<t:{starttime}:R>')
         embed.add_field(name='Refresh every:', value=f'{REFRESH_TIME}s', inline=False)
@@ -146,29 +192,62 @@ class BanChecker(commands.Bot):
                         if self.first_ban:  # Ignore the first ban
                             self.first_ban = False
                         else:
-                            ban_timestamp = int(datetime.now().timestamp())
-                            unban_timestamp = int((datetime.now() + timedelta(days=2)).timestamp())
-                            embed = discord.Embed(
-                                title=":robot: AntiCheat Ban Notification",
-                                color=0xff0000 if "Console" in staff else 0x00ff00
-                            )
-                            embed.add_field(name='User:', value=user, inline=False)
-                            embed.add_field(name='Reason:', value=reason, inline=False)
-                            embed.add_field(name='Banned By:', value='Console' if "Console" in staff else staff, inline=False)
-                            embed.add_field(name='Ban ID:', value=f'Ban #{self.id}', inline=False)
-                            embed.add_field(name='Banned:', value=f'<t:{ban_timestamp}:R>', inline=False)
-                            embed.add_field(name='Will get unban:', value=f'<t:{unban_timestamp}:R>', inline=False)
-                            embed.add_field(name='Full info:', value=f'[Click Here](https://id.heromc.net/vi-pham/info.php?type=ban&id={self.id})', inline=False)
-                            embed.set_thumbnail(url=self.guild.icon.url)
+                            embed = create_ban_embed(user, staff, reason, self.id, self.guild.icon.url)
                             await self.channel.send(embed=embed)
+                            log_ban_to_db(user, staff, reason)  # Log to the database
                         self.id += 1
                 else:
-                    logging.error(f'Heromc: Error: {response.status_code}')
+                    logger.error(f'Heromc: Error: {response.status_code}')
             except Exception as e:
-                logging.error(e)
+                logger.error(e)
             await asyncio.sleep(REFRESH_TIME)
 
+# Additional commands
+@bot.command(name='banlog', help='Shows the ban log')
+async def banlog(ctx, user: str = None):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    if user:
+        cursor.execute('SELECT * FROM bans WHERE user = ?', (user,))
+    else:
+        cursor.execute('SELECT * FROM bans ORDER BY timestamp DESC LIMIT 10')
+    results = cursor.fetchall()
+    conn.close()
+
+    if results:
+        embed = discord.Embed(
+            title="Ban Log",
+            color=0x00ff00
+        )
+        for row in results:
+            embed.add_field(name=f"Ban ID: {row[0]}", value=f"User: {row[1]}\nStaff: {row[2]}\nReason: {row[3]}\nTime: {row[4]}", inline=False)
+        await ctx.send(embed=embed)
+    else:
+        await ctx.send("No bans found.")
+
+@bot.command(name='clearlog', help='Clears the ban log')
+@commands.has_permissions(administrator=True)
+async def clearlog(ctx):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM bans')
+    conn.commit()
+    conn.close()
+    await ctx.send("Ban log cleared.")
+
+@bot.command(name='help', help='Displays this help message')
+async def custom_help(ctx):
+    help_text = """
+    **HeromcBan Tracker Commands:**
+    - **!banlog [user]**: Shows the ban log for a specific user or the latest 10 bans if no user is specified.
+    - **!clearlog**: Clears the ban log (Admin only).
+    - **!help**: Displays this help message.
+    """
+    await ctx.send(help_text)
+
 # Run the bot
-bot = BanChecker()
-logging.info('Starting...')
-bot.run(BOT_TOKEN)
+if __name__ == '__main__':
+    init_db()
+    bot = BanChecker()
+    logger.info('Starting...')
+    bot.run(BOT_TOKEN)
