@@ -73,3 +73,5 @@ Here's an example of how to use the Heromc Ban Tracker:
 ## Preview
 
 ![Preview Image](https://cdn.discordapp.com/attachments/1262641976633851996/1269453856287227924/image.png?ex=66b01e88&is=66aecd08&hm=f7da52ca3c5ecd0705ba25d3808dd02a18b308dad263024b9b0d8b7e8fa37388&)
+
+## Project based on GPL 3.0
